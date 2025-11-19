@@ -19,6 +19,7 @@ class TSStrategy:
     diversification_patience: int = 100
     diversification_multiplier: float = 1.5
     max_tenure_multiplier: float = 5.0
+    restart_when_max_reached: bool = True
     
     # Intensification parameters
     enable_intensification: bool = False
@@ -85,6 +86,13 @@ class CvrpTS(CVRP_Solver):
                     self.tabu_list = deque(self.tabu_list, maxlen=self.tenure)
                     if self.debug_options.verbose:
                         print(f"Diversification applied at iteration {self._iters}. New tenure: {self.tenure}")
+                elif self.strategy.restart_when_max_reached:
+                    self._current_solution = self._constructive_heuristic()
+                    self.evaluator.evaluate_objfun(self._current_solution)
+                    self.tenure = self.initial_tenure
+                    self.tabu_list = deque(maxlen=self.tenure)
+                    if self.debug_options.verbose:
+                        print(f"Diversification max tenure reached at iteration {self._iters}. Restarting from constructive heuristic.")
 
             self._current_solution = self._neighborhood_move(self._current_solution)
             
