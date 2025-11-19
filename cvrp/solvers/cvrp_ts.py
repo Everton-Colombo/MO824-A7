@@ -19,6 +19,10 @@ class TSStrategy:
     diversification_patience: int = 100
     diversification_multiplier: float = 1.5
     max_tenure_multiplier: float = 5.0
+    
+    # Intensification parameters
+    enable_intensification: bool = False
+    intensification_patience: int = 1000
 
 class CvrpTS(CVRP_Solver):
     def __init__(self, instance: CvrpInstance, tenure: int = 7, strategy: TSStrategy = TSStrategy(),
@@ -53,8 +57,23 @@ class CvrpTS(CVRP_Solver):
         while not self._check_termination():
             self._perform_debug_actions()
             
+            # Intensification Strategy (Restart)
+            if (self.strategy.enable_intensification and 
+                self._iters_wo_improvement > 0 and 
+                self._iters_wo_improvement % self.strategy.intensification_patience == 0):
+                
+                # Restart from best solution
+                self._current_solution = self.best_solution.copy()
+                
+                # Reset tenure to initial
+                self.tenure = self.initial_tenure
+                self.tabu_list = deque(maxlen=self.tenure)
+                
+                if self.debug_options.verbose:
+                    print(f"Intensification (Restart) applied at iteration {self._iters}. Resetting to best solution and initial tenure.")
+
             # Diversification Strategy
-            if (self.strategy.enable_diversification and 
+            elif (self.strategy.enable_diversification and 
                 self._iters_wo_improvement > 0 and 
                 self._iters_wo_improvement % self.strategy.diversification_patience == 0):
                 
