@@ -13,6 +13,16 @@ from .abc_solver import CVRP_Solver, TerminationCriteria, DebugOptions
 class TSStrategy:
     search_strategy: Literal['first', 'best'] = 'best'
     neighborhood: Literal['relocate'] = 'relocate' # Can extend to swap later
+    
+    # Diversification parameters
+    enable_diversification: bool = False
+    diversification_patience: int = 100
+    diversification_multiplier: float = 1.5
+    max_tenure_multiplier: float = 5.0
+    
+    # Intensification parameters
+    enable_intensification: bool = False
+    intensification_patience: int = 1000
 
 class CvrpTS(CVRP_Solver):
     def __init__(self, instance: CvrpInstance, tenure: int = 7, strategy: TSStrategy = TSStrategy(),
@@ -20,6 +30,7 @@ class CvrpTS(CVRP_Solver):
                  debug_options: DebugOptions = DebugOptions()):
         super().__init__(instance, termination_criteria, debug_options)
         self.strategy = strategy
+        self.initial_tenure = tenure
         self.tenure = tenure
         # Tabu list stores (customer_id, iteration_expiry) or just customer_id in a deque
         # Simple implementation: deque of customer_ids that are tabu
@@ -30,6 +41,10 @@ class CvrpTS(CVRP_Solver):
 
     def solve(self) -> CvrpSolution:
         self._reset_execution_state()
+        
+        # Reset tenure and tabu list
+        self.tenure = self.initial_tenure
+        self.tabu_list = deque(maxlen=self.tenure)
         
         # Constructive Heuristic
         self.best_solution = self._constructive_heuristic()
@@ -42,9 +57,45 @@ class CvrpTS(CVRP_Solver):
         while not self._check_termination():
             self._perform_debug_actions()
             
+            # Intensification Strategy (Restart)
+            if (self.strategy.enable_intensification and 
+                self._iters_wo_improvement > 0 and 
+                self._iters_wo_improvement % self.strategy.intensification_patience == 0):
+                
+                # Restart from best solution
+                self._current_solution = self.best_solution.copy()
+                
+                # Reset tenure to initial
+                self.tenure = self.initial_tenure
+                self.tabu_list = deque(maxlen=self.tenure)
+                
+                if self.debug_options.verbose:
+                    print(f"Intensification (Restart) applied at iteration {self._iters}. Resetting to best solution and initial tenure.")
+
+            # Diversification Strategy
+            elif (self.strategy.enable_diversification and 
+                self._iters_wo_improvement > 0 and 
+                self._iters_wo_improvement % self.strategy.diversification_patience == 0):
+                
+                new_tenure = int(self.tenure * self.strategy.diversification_multiplier)
+                max_tenure = int(self.initial_tenure * self.strategy.max_tenure_multiplier)
+                
+                if new_tenure <= max_tenure:
+                    self.tenure = new_tenure
+                    self.tabu_list = deque(self.tabu_list, maxlen=self.tenure)
+                    if self.debug_options.verbose:
+                        print(f"Diversification applied at iteration {self._iters}. New tenure: {self.tenure}")
+
             self._current_solution = self._neighborhood_move(self._current_solution)
             
             self._update_execution_state()
+            
+            # Reset tenure if improvement found
+            if self._iters_wo_improvement == 0 and self.tenure != self.initial_tenure:
+                self.tenure = self.initial_tenure
+                self.tabu_list = deque(self.tabu_list, maxlen=self.tenure)
+                if self.debug_options.verbose:
+                    print(f"Improvement found at iteration {self._iters}. Resetting tenure to: {self.tenure}")
             
         self.execution_time = time.time() - self._start_time
         return self.best_solution
