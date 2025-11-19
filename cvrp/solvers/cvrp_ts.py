@@ -1,8 +1,8 @@
 import random
 import time
 from collections import deque
-from typing import Literal, List, Tuple
-from dataclasses import dataclass
+from typing import Literal, List, Tuple, Dict, Any
+from dataclasses import dataclass, field
 
 from ..cvrp_instance import CvrpInstance
 from ..cvrp_evaluator import CvrpEvaluator
@@ -12,7 +12,7 @@ from .abc_solver import CVRP_Solver, TerminationCriteria, DebugOptions
 @dataclass
 class TSStrategy:
     search_strategy: Literal['first', 'best'] = 'best'
-    neighborhood: Literal['relocate'] = 'relocate' # Can extend to swap later
+    neighborhoods: Dict[str, bool] = field(default_factory=lambda: {'relocate': True, 'swap': True})
     
     # Diversification parameters
     enable_diversification: bool = False
@@ -169,88 +169,212 @@ class CvrpTS(CVRP_Solver):
         return CvrpSolution(routes=routes)
 
     def _neighborhood_move(self, solution: CvrpSolution) -> CvrpSolution:
-        # Relocate move: Move customer from (r1, p1) to (r2, p2)
+        # Track best admissible move (non-tabu or aspiration)
+        best_admissible_delta = float('inf')
+        best_admissible_move = None 
+        best_admissible_type = None
         
-        best_delta = float('inf')
-        best_move = None # (source_r, source_p, target_r, target_p, customer)
+        # Track best tabu move (fallback if no admissible move exists)
+        best_tabu_delta = float('inf')
+        best_tabu_move = None
+        best_tabu_type = None
         
         current_obj = self.evaluator.evaluate_objfun(solution)
         best_obj = self.evaluator.evaluate_objfun(self.best_solution)
         
-        # Iterate over all customers (source)
+        # Determine order of neighborhoods to explore
+        neighborhoods_to_explore = []
+        if self.strategy.neighborhoods.get('relocate', False):
+            neighborhoods_to_explore.append('relocate')
+        if self.strategy.neighborhoods.get('swap', False):
+            neighborhoods_to_explore.append('swap')
+            
+        if self.strategy.search_strategy == 'first':
+            random.shuffle(neighborhoods_to_explore)
+            
+        for neighborhood in neighborhoods_to_explore:
+            if neighborhood == 'relocate':
+                delta, move, is_admissible = self._explore_relocate(solution, current_obj, best_obj)
+                
+                if is_admissible:
+                    if move is not None and delta < best_admissible_delta:
+                        best_admissible_delta = delta
+                        best_admissible_move = move
+                        best_admissible_type = 'relocate'
+                        
+                        if self.strategy.search_strategy == 'first' and delta < -0.0001:
+                            return self._apply_move(solution, best_admissible_move, 'relocate')
+                else:
+                    if move is not None and delta < best_tabu_delta:
+                        best_tabu_delta = delta
+                        best_tabu_move = move
+                        best_tabu_type = 'relocate'
+
+            elif neighborhood == 'swap':
+                delta, move, is_admissible = self._explore_swap(solution, current_obj, best_obj)
+                
+                if is_admissible:
+                    if move is not None and delta < best_admissible_delta:
+                        best_admissible_delta = delta
+                        best_admissible_move = move
+                        best_admissible_type = 'swap'
+                        
+                        if self.strategy.search_strategy == 'first' and delta < -0.0001:
+                            return self._apply_move(solution, best_admissible_move, 'swap')
+                else:
+                    if move is not None and delta < best_tabu_delta:
+                        best_tabu_delta = delta
+                        best_tabu_move = move
+                        best_tabu_type = 'swap'
+
+        # Prefer admissible move
+        if best_admissible_move:
+            return self._apply_move(solution, best_admissible_move, best_admissible_type)
+        
+        # Fallback to tabu move if no admissible move found (prevent getting stuck)
+        if best_tabu_move:
+            return self._apply_move(solution, best_tabu_move, best_tabu_type)
+        
+        return solution
+
+    def _explore_relocate(self, solution: CvrpSolution, current_obj: float, best_obj: float) -> Tuple[float, Any, bool]:
+        best_admissible_delta = float('inf')
+        best_admissible_move = None
+        
+        best_tabu_delta = float('inf')
+        best_tabu_move = None
+        
         for r1_idx, r1 in enumerate(solution.routes):
             for p1_idx, customer in enumerate(r1):
-                
-                # Iterate over all target positions
                 for r2_idx, r2 in enumerate(solution.routes):
-                    # Optimization: if we have empty routes, we only need to try one empty route
-                    # But for simplicity, iterate all.
-                    
                     for p2_idx in range(len(r2) + 1):
-                        # Skip if same position
                         if r1_idx == r2_idx:
                             if p1_idx == p2_idx or p1_idx + 1 == p2_idx:
                                 continue
                         
-                        # Check capacity
                         if not self.evaluator.check_capacity(solution, r1_idx, p1_idx, r2_idx):
                             continue
                             
-                        # Calculate delta
                         delta = self.evaluator.evaluate_relocate_delta(solution, r1_idx, p1_idx, r2_idx, p2_idx)
                         
-                        # Tabu check
                         is_tabu = customer in self.tabu_list
-                        
-                        # Aspiration
-                        is_aspiration = (current_obj + delta < best_obj) # Minimization
+                        is_aspiration = (current_obj + delta < best_obj)
                         
                         if not is_tabu or is_aspiration:
-                            if delta < best_delta:
-                                best_delta = delta
-                                best_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer)
+                            if delta < best_admissible_delta:
+                                best_admissible_delta = delta
+                                best_admissible_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer)
                                 
                                 if self.strategy.search_strategy == 'first' and delta < -0.0001:
-                                    # Found improvement
-                                    return self._apply_move(solution, best_move)
+                                    return best_admissible_delta, best_admissible_move, True
+                        else:
+                            if delta < best_tabu_delta:
+                                best_tabu_delta = delta
+                                best_tabu_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer)
+                                
+        if best_admissible_move:
+            return best_admissible_delta, best_admissible_move, True
+        elif best_tabu_move:
+            return best_tabu_delta, best_tabu_move, False
+        else:
+            return float('inf'), None, False
 
-        if best_move:
-            return self._apply_move(solution, best_move)
+    def _explore_swap(self, solution: CvrpSolution, current_obj: float, best_obj: float) -> Tuple[float, Any, bool]:
+        best_admissible_delta = float('inf')
+        best_admissible_move = None
         
-        # If no move found (e.g. all tabu and no aspiration), we should probably just return current
-        # Or pick the best tabu move (not implemented here for simplicity)
-        return solution
+        best_tabu_delta = float('inf')
+        best_tabu_move = None
+        
+        # Iterate all pairs of customers
+        # To avoid duplicates (A,B) vs (B,A), we can enforce ordering or just iterate carefully
+        # We iterate through routes and positions
+        
+        routes = solution.routes
+        for r1_idx, r1 in enumerate(routes):
+            for p1_idx, customer1 in enumerate(r1):
+                
+                # Start inner loop from current position to avoid duplicates and self-swap
+                # If same route, start from p1_idx + 1
+                # If next routes, start from 0
+                
+                start_r2 = r1_idx
+                
+                for r2_idx in range(start_r2, len(routes)):
+                    r2 = routes[r2_idx]
+                    start_p2 = p1_idx + 1 if r1_idx == r2_idx else 0
+                    
+                    for p2_idx in range(start_p2, len(r2)):
+                        customer2 = r2[p2_idx]
+                        
+                        if not self.evaluator.check_swap_capacity(solution, r1_idx, p1_idx, r2_idx, p2_idx):
+                            continue
+                            
+                        delta = self.evaluator.evaluate_swap_delta(solution, r1_idx, p1_idx, r2_idx, p2_idx)
+                        
+                        # Tabu check: if EITHER is tabu, move is tabu
+                        is_tabu = (customer1 in self.tabu_list) or (customer2 in self.tabu_list)
+                        is_aspiration = (current_obj + delta < best_obj)
+                        
+                        if not is_tabu or is_aspiration:
+                            if delta < best_admissible_delta:
+                                best_admissible_delta = delta
+                                best_admissible_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer1, customer2)
+                                
+                                if self.strategy.search_strategy == 'first' and delta < -0.0001:
+                                    return best_admissible_delta, best_admissible_move, True
+                        else:
+                            if delta < best_tabu_delta:
+                                best_tabu_delta = delta
+                                best_tabu_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer1, customer2)
+                                    
+        if best_admissible_move:
+            return best_admissible_delta, best_admissible_move, True
+        elif best_tabu_move:
+            return best_tabu_delta, best_tabu_move, False
+        else:
+            return float('inf'), None, False
 
-    def _apply_move(self, solution: CvrpSolution, move) -> CvrpSolution:
-        r1_idx, p1_idx, r2_idx, p2_idx, customer = move
-        
-        # Create new solution (deep copy of routes structure)
-        # We can optimize by only copying affected routes
-        new_routes = [r[:] for r in solution.routes]
-        
-        # Remove from source
-        # Note: if r1 == r2, indices shift.
-        # If r1 == r2 and p1 < p2, p2 shifts down by 1.
-        
-        node = new_routes[r1_idx][p1_idx]
-        del new_routes[r1_idx][p1_idx]
-        
-        target_p = p2_idx
-        if r1_idx == r2_idx and p1_idx < p2_idx:
-            target_p -= 1
+    def _apply_move(self, solution: CvrpSolution, move, move_type: str) -> CvrpSolution:
+        if move_type == 'relocate':
+            r1_idx, p1_idx, r2_idx, p2_idx, customer = move
             
-        new_routes[r2_idx].insert(target_p, node)
-        
-        # Remove empty routes if any?
-        new_routes = [r for r in new_routes if r]
-        
-        # Update Tabu List
-        self.tabu_list.append(customer)
-        
-        new_sol = CvrpSolution(routes=new_routes)
-        # Update obj val
-        self.evaluator.evaluate_objfun(new_sol)
-        return new_sol
+            new_routes = [r[:] for r in solution.routes]
+            
+            node = new_routes[r1_idx][p1_idx]
+            del new_routes[r1_idx][p1_idx]
+            
+            target_p = p2_idx
+            if r1_idx == r2_idx and p1_idx < p2_idx:
+                target_p -= 1
+                
+            new_routes[r2_idx].insert(target_p, node)
+            new_routes = [r for r in new_routes if r]
+            
+            self.tabu_list.append(customer)
+            
+            new_sol = CvrpSolution(routes=new_routes)
+            self.evaluator.evaluate_objfun(new_sol)
+            return new_sol
+            
+        elif move_type == 'swap':
+            r1_idx, p1_idx, r2_idx, p2_idx, c1, c2 = move
+            
+            new_routes = [r[:] for r in solution.routes]
+            
+            # Swap
+            new_routes[r1_idx][p1_idx] = c2
+            new_routes[r2_idx][p2_idx] = c1
+            
+            # Add both to tabu list
+            self.tabu_list.append(c1)
+            self.tabu_list.append(c2)
+            
+            new_sol = CvrpSolution(routes=new_routes)
+            self.evaluator.evaluate_objfun(new_sol)
+            return new_sol
+            
+        return solution
 
     def _perform_debug_actions(self):
         if self.debug_options.verbose:
