@@ -149,3 +149,69 @@ class CvrpEvaluator:
         current_load = sum(self.instance.demands[n] for n in solution.routes[target_route_idx])
         
         return (current_load + demand) <= self.instance.capacity
+
+    def check_swap_capacity(self, solution: CvrpSolution, 
+                            r1_idx: int, p1_idx: int, 
+                            r2_idx: int, p2_idx: int) -> bool:
+        """
+        Checks if swapping two nodes violates capacity constraints.
+        """
+        if r1_idx == r2_idx:
+            return True
+            
+        node1 = solution.routes[r1_idx][p1_idx]
+        node2 = solution.routes[r2_idx][p2_idx]
+        
+        demand1 = self.instance.demands[node1]
+        demand2 = self.instance.demands[node2]
+        
+        load1 = sum(self.instance.demands[n] for n in solution.routes[r1_idx])
+        load2 = sum(self.instance.demands[n] for n in solution.routes[r2_idx])
+        
+        if load1 - demand1 + demand2 > self.instance.capacity:
+            return False
+        if load2 - demand2 + demand1 > self.instance.capacity:
+            return False
+            
+        return True
+
+    def evaluate_swap_delta(self, solution: CvrpSolution, 
+                            r1_idx: int, p1_idx: int, 
+                            r2_idx: int, p2_idx: int) -> float:
+        """
+        Evaluates the cost change of swapping two nodes.
+        """
+        if r1_idx == r2_idx and p1_idx == p2_idx:
+            return 0.0
+            
+        route1 = solution.routes[r1_idx]
+        route2 = solution.routes[r2_idx]
+        
+        node1 = route1[p1_idx]
+        node2 = route2[p2_idx]
+        
+        if r1_idx == r2_idx:
+            # Intra-route swap
+            # Create new route and calculate diff
+            new_route = route1[:]
+            new_route[p1_idx] = node2
+            new_route[p2_idx] = node1
+            return self._calculate_route_cost(new_route) - self._calculate_route_cost(route1)
+        else:
+            # Inter-route swap
+            # Calculate delta for route 1
+            # Remove node1, insert node2 at p1_idx
+            
+            # Optimization: calculate local delta instead of full route cost
+            # But full route cost is safer and O(N) is small for VRP routes usually.
+            
+            new_route1 = route1[:]
+            new_route1[p1_idx] = node2
+            
+            new_route2 = route2[:]
+            new_route2[p2_idx] = node1
+            
+            cost1_diff = self._calculate_route_cost(new_route1) - self._calculate_route_cost(route1)
+            cost2_diff = self._calculate_route_cost(new_route2) - self._calculate_route_cost(route2)
+            
+            return cost1_diff + cost2_diff
