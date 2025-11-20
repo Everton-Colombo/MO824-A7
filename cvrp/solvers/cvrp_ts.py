@@ -202,37 +202,43 @@ class CvrpTS(CVRP_Solver):
             
         for neighborhood in neighborhoods_to_explore:
             if neighborhood == 'relocate':
-                delta, move, is_admissible = self._explore_relocate(solution, current_obj, best_obj)
+                adm_delta, adm_move, tabu_delta, tabu_move = self._explore_relocate(solution, current_obj, best_obj)
                 
-                if is_admissible:
-                    if move is not None and delta < best_admissible_delta:
-                        best_admissible_delta = delta
-                        best_admissible_move = move
+                # Update best admissible
+                if adm_move is not None:
+                    if adm_delta < best_admissible_delta:
+                        best_admissible_delta = adm_delta
+                        best_admissible_move = adm_move
                         best_admissible_type = 'relocate'
                         
-                        if self.strategy.search_strategy == 'first' and delta < -0.0001:
+                        if self.strategy.search_strategy == 'first' and adm_delta < -0.0001:
                             return self._apply_move(solution, best_admissible_move, 'relocate')
-                else:
-                    if move is not None and delta < best_tabu_delta:
-                        best_tabu_delta = delta
-                        best_tabu_move = move
+                
+                # Update best tabu
+                if tabu_move is not None:
+                    if tabu_delta < best_tabu_delta:
+                        best_tabu_delta = tabu_delta
+                        best_tabu_move = tabu_move
                         best_tabu_type = 'relocate'
 
             elif neighborhood == 'swap':
-                delta, move, is_admissible = self._explore_swap(solution, current_obj, best_obj)
+                adm_delta, adm_move, tabu_delta, tabu_move = self._explore_swap(solution, current_obj, best_obj)
                 
-                if is_admissible:
-                    if move is not None and delta < best_admissible_delta:
-                        best_admissible_delta = delta
-                        best_admissible_move = move
+                # Update best admissible
+                if adm_move is not None:
+                    if adm_delta < best_admissible_delta:
+                        best_admissible_delta = adm_delta
+                        best_admissible_move = adm_move
                         best_admissible_type = 'swap'
                         
-                        if self.strategy.search_strategy == 'first' and delta < -0.0001:
+                        if self.strategy.search_strategy == 'first' and adm_delta < -0.0001:
                             return self._apply_move(solution, best_admissible_move, 'swap')
-                else:
-                    if move is not None and delta < best_tabu_delta:
-                        best_tabu_delta = delta
-                        best_tabu_move = move
+                
+                # Update best tabu
+                if tabu_move is not None:
+                    if tabu_delta < best_tabu_delta:
+                        best_tabu_delta = tabu_delta
+                        best_tabu_move = tabu_move
                         best_tabu_type = 'swap'
 
         # Prefer admissible move
@@ -243,9 +249,12 @@ class CvrpTS(CVRP_Solver):
         if best_tabu_move:
             return self._apply_move(solution, best_tabu_move, best_tabu_type)
         
+        if self.debug_options.verbose:
+            print(f"Warning: No valid moves found at iteration {self._iters}!")
+            
         return solution
 
-    def _explore_relocate(self, solution: CvrpSolution, current_obj: float, best_obj: float) -> Tuple[float, Any, bool]:
+    def _explore_relocate(self, solution: CvrpSolution, current_obj: float, best_obj: float) -> Tuple[float, Any, float, Any]:
         best_admissible_delta = float('inf')
         best_admissible_move = None
         
@@ -274,20 +283,15 @@ class CvrpTS(CVRP_Solver):
                                 best_admissible_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer)
                                 
                                 if self.strategy.search_strategy == 'first' and delta < -0.0001:
-                                    return best_admissible_delta, best_admissible_move, True
+                                    return best_admissible_delta, best_admissible_move, float('inf'), None
                         else:
                             if delta < best_tabu_delta:
                                 best_tabu_delta = delta
                                 best_tabu_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer)
                                 
-        if best_admissible_move:
-            return best_admissible_delta, best_admissible_move, True
-        elif best_tabu_move:
-            return best_tabu_delta, best_tabu_move, False
-        else:
-            return float('inf'), None, False
+        return best_admissible_delta, best_admissible_move, best_tabu_delta, best_tabu_move
 
-    def _explore_swap(self, solution: CvrpSolution, current_obj: float, best_obj: float) -> Tuple[float, Any, bool]:
+    def _explore_swap(self, solution: CvrpSolution, current_obj: float, best_obj: float) -> Tuple[float, Any, float, Any]:
         best_admissible_delta = float('inf')
         best_admissible_move = None
         
@@ -330,18 +334,13 @@ class CvrpTS(CVRP_Solver):
                                 best_admissible_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer1, customer2)
                                 
                                 if self.strategy.search_strategy == 'first' and delta < -0.0001:
-                                    return best_admissible_delta, best_admissible_move, True
+                                    return best_admissible_delta, best_admissible_move, float('inf'), None
                         else:
                             if delta < best_tabu_delta:
                                 best_tabu_delta = delta
                                 best_tabu_move = (r1_idx, p1_idx, r2_idx, p2_idx, customer1, customer2)
                                     
-        if best_admissible_move:
-            return best_admissible_delta, best_admissible_move, True
-        elif best_tabu_move:
-            return best_tabu_delta, best_tabu_move, False
-        else:
-            return float('inf'), None, False
+        return best_admissible_delta, best_admissible_move, best_tabu_delta, best_tabu_move
 
     def _apply_move(self, solution: CvrpSolution, move, move_type: str) -> CvrpSolution:
         if move_type == 'relocate':
