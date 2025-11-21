@@ -101,3 +101,79 @@ class SavingsHeuristic(BaseConstructiveHeuristic):
         sol = CvrpSolution(routes=final_routes)
         self.evaluator.evaluate_objfun(sol)
         return sol
+
+class CheapestInsertionHeuristic(BaseConstructiveHeuristic):
+    """
+    Cheapest Insertion.
+    Start with empty routes. Iteratively insert the unvisited node that minimizes 
+    cost increase across all feasible positions in all active routes.
+    """
+
+    def construct(self, randomize: bool = False) -> CvrpSolution:
+        n = self.instance.dimension
+        depot = self.instance.depot
+        capacity = self.instance.capacity
+        demands = self.instance.demands
+        dist_matrix = self.instance.distance_matrix
+        
+        unvisited = set(i for i in range(n) if i != depot)
+        routes = []
+        route_loads = []
+
+        if unvisited:
+            farthest = max(unvisited, key=lambda x: dist_matrix[depot][x])
+            routes.append([farthest])
+            route_loads.append(demands[farthest])
+            unvisited.remove(farthest)
+        else:
+            return CvrpSolution(routes=[])
+
+        while unvisited:
+            best_cost_increase = float('inf')
+            best_node = -1
+            best_route_idx = -1
+            best_position = -1
+            
+            for node in unvisited:
+                node_demand = demands[node]
+                
+                for r_idx, route in enumerate(routes):
+                    if route_loads[r_idx] + node_demand <= capacity:
+                        
+                        for pos in range(len(route) + 1):
+                            prev_node = route[pos-1] if pos > 0 else depot
+                            next_node = route[pos] if pos < len(route) else depot
+                            
+                            increase = (dist_matrix[prev_node][node] + 
+                                        dist_matrix[node][next_node] - 
+                                        dist_matrix[prev_node][next_node])
+                            
+                            if increase < best_cost_increase:
+                                best_cost_increase = increase
+                                best_node = node
+                                best_route_idx = r_idx
+                                best_position = pos
+
+            for node in unvisited:
+                increase = dist_matrix[depot][node] + dist_matrix[node][depot]
+                if increase < best_cost_increase:
+                    best_cost_increase = increase
+                    best_node = node
+                    best_route_idx = -1
+                    best_position = 0
+
+            if best_node != -1:
+                unvisited.remove(best_node)
+                if best_route_idx == -1:
+                    routes.append([best_node])
+                    route_loads.append(demands[best_node])
+                else:
+                    routes[best_route_idx].insert(best_position, best_node)
+                    route_loads[best_route_idx] += demands[best_node]
+            else:
+                break
+
+        sol = CvrpSolution(routes=routes)
+        self.evaluator.evaluate_objfun(sol)
+        return sol
+
