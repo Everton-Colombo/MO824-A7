@@ -177,3 +177,114 @@ class CheapestInsertionHeuristic(BaseConstructiveHeuristic):
         self.evaluator.evaluate_objfun(sol)
         return sol
 
+class RouteFirstClusterSecondHeuristic(BaseConstructiveHeuristic):
+    """
+    Implementation of Beasley's (1983) Route-first, Cluster-second method.
+    Phase 1: Create a Giant Tour (TSP) visiting all nodes.
+    Phase 2: Use 'Split' algorithm (Shortest Path on DAG) to partition the tour into feasible routes.
+    """
+
+    def construct(self, randomize: bool = False) -> CvrpSolution:
+        giant_tour = self._generate_giant_tour()
+        
+        routes = self._split(giant_tour)
+        
+        sol = CvrpSolution(routes=routes)
+        self.evaluator.evaluate_objfun(sol)
+        return sol
+
+    def _generate_giant_tour(self) -> List[int]:
+        """
+        Generates a TSP tour using Nearest Neighbor followed by 2-opt.
+        """
+        n = self.instance.dimension
+        depot = self.instance.depot
+        dist_matrix = self.instance.distance_matrix
+        
+        unvisited = set(i for i in range(n) if i != depot)
+        current = depot
+        tour = []
+        
+        while unvisited:
+            nearest = min(unvisited, key=lambda x: dist_matrix[current][x])
+            tour.append(nearest)
+            unvisited.remove(nearest)
+            current = nearest
+            
+        improved = True
+        while improved:
+            improved = False
+            for i in range(len(tour) - 1):
+                for j in range(i + 1, len(tour)):
+                    if j - i == 1: continue
+                    
+                    node_a = tour[i]
+                    node_b = tour[i+1]
+                    node_c = tour[j]
+                    node_d = tour[j+1] if j+1 < len(tour) else tour[0]
+                    
+                    d_ab = dist_matrix[node_a][node_b]
+                    d_cd = dist_matrix[node_c][node_d]
+                    d_ac = dist_matrix[node_a][node_c]
+                    d_bd = dist_matrix[node_b][node_d]
+                    
+                    if d_ac + d_bd < d_ab + d_cd:
+                        tour[i+1:j+1] = tour[i+1:j+1][::-1]
+                        improved = True
+                        
+        return tour
+
+    def _split(self, giant_tour: List[int]) -> List[List[int]]:
+        """
+        The Split algorithm.
+        Constructs an auxiliary graph where an edge (i, j) represents a valid vehicle route
+        serving customers from index i to j in the giant tour.
+        Finds shortest path from 0 to len(giant_tour).
+        """
+        depot = self.instance.depot
+        capacity = self.instance.capacity
+        demands = self.instance.demands
+        dist_matrix = self.instance.distance_matrix
+        
+        n_tour = len(giant_tour)
+        
+        V = [float('inf')] * (n_tour + 1)
+        V[0] = 0.0
+        
+        P = [-1] * (n_tour + 1)
+        
+        for i in range(n_tour):
+            if V[i] == float('inf'):
+                continue
+                
+            current_load = 0
+            current_dist = 0.0
+            
+            for j in range(i, n_tour):
+                node = giant_tour[j]
+                current_load += demands[node]
+                
+                if current_load > capacity:
+                    break
+                
+                if j == i:
+                    current_dist = dist_matrix[depot][node]
+                else:
+                    prev_node = giant_tour[j-1]
+                    current_dist += dist_matrix[prev_node][node]
+                
+                route_cost = current_dist + dist_matrix[node][depot]
+                
+                if V[i] + route_cost < V[j+1]:
+                    V[j+1] = V[i] + route_cost
+                    P[j+1] = i
+                    
+        routes = []
+        curr = n_tour
+        while curr > 0:
+            prev = P[curr]
+            segment = giant_tour[prev:curr]
+            routes.append(segment)
+            curr = prev
+            
+        return routes[::-1]
